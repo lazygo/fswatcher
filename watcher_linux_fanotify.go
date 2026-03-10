@@ -61,6 +61,7 @@ func (w *watcher) runFanotifyLoop(ctx context.Context, p *fanotify, done chan st
 
 	const bufSize = 64 * 1024
 	buf := make([]byte, bufSize)
+	backoff := newBackoffState()
 
 	for {
 		select {
@@ -78,11 +79,15 @@ func (w *watcher) runFanotifyLoop(ctx context.Context, p *fanotify, done chan st
 			if ctx.Err() != nil {
 				return
 			}
-			if readErr != nil {
-				w.logError("fanotify read error: %v", readErr)
+
+			if !w.handleLoopError("fanotify", readErr, backoff) {
+				return
 			}
-			return
+			continue
 		}
+
+		// Success, reset backoff
+		w.resetBackoff(backoff)
 
 		offset := 0
 		for offset < n {

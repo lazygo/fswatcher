@@ -76,38 +76,44 @@ func (w *watcher) runKqueueLoop(ctx context.Context, k *kqueue, done chan struct
 		close(done)
 	}()
 
-	// Init event buffer and timeout
-	events := make([]unix.Kevent_t, w.bufferSize)
-	ts := unix.NsecToTimespec(w.cooldown.Nanoseconds())
-	timeout := &ts
+		// Init event buffer and timeout
+		events := make([]unix.Kevent_t, w.bufferSize)
+		ts := unix.NsecToTimespec(w.cooldown.Nanoseconds())
+		timeout := &ts
+		backoff := newBackoffState()
 
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		default:
-		}
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			default:
+			}
 
-		// Polling
-		n, err := unix.Kevent(k.kqFd, nil, events, timeout)
-		if err != nil {
-			// Interrupted signal
-			if err == unix.EINTR {
+			// Polling
+			n, err := unix.Kevent(k.kqFd, nil, events, timeout)
+			if err != nil {
+				// Interrupted signal
+				if err == unix.EINTR {
+					continue
+				}
+
+				if !w.handleLoopError("kqueue", err, backoff) {
+					return
+				}
 				continue
 			}
-			// Other errors
-			continue
-		}
 
-		// No events occurred, loop back
-		if n == 0 {
-			continue
-		}
+			// Success, reset backoff
+			w.resetBackoff(backoff)
 
-		// Include the 'n' events returned
-		w.processKqueueEvents(k, events[:n])
-	}
-}
+			// No events occurred, loop back
+			if n == 0 {
+				continue
+			}
+
+			// Include the 'n' events returned
+			w.processKqueueEvents(k, events[:n])
+		}}
 
 // processKqueueEvents handles events from the kqueue
 func (w *watcher) processKqueueEvents(k *kqueue, events []unix.Kevent_t) {
@@ -241,6 +247,9 @@ func (k *kqueue) batchAddWatchesLocked(entries []struct {
 				fd, err = unix.Open(e.path, unix.O_RDONLY, 0)
 			}
 			if err != nil {
+				if err == unix.EMFILE || err == unix.ENFILE {
+					k.w.logWarn("kqueue: reached open file limit (ulimit -n), skipping %s. Consider increasing system limits.", e.path)
+				}
 				continue // Skip unreadable files
 			}
 		}
@@ -314,6 +323,9 @@ func (k *kqueue) addSingleWatchLocked(path string) error {
 			fd, err = unix.Open(path, unix.O_RDONLY, 0)
 		}
 		if err != nil {
+			if err == unix.EMFILE || err == unix.ENFILE {
+				k.w.logWarn("kqueue: reached open file limit (ulimit -n), skipping %s. Consider increasing system limits.", path)
+			}
 			return err
 		}
 	}

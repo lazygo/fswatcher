@@ -100,6 +100,7 @@ func (w *watcher) runWindowsLoop(iocp windows.Handle, done chan struct{}) {
 		close(done)
 	}()
 
+	backoff := newBackoffState()
 	for {
 		var bytesRead uint32
 		var key uintptr
@@ -117,9 +118,15 @@ func (w *watcher) runWindowsLoop(iocp windows.Handle, done chan struct{}) {
 			if err == windows.ERROR_OPERATION_ABORTED {
 				continue
 			}
-			w.logError("GetQueuedCompletionStatus error: %v", err)
+
+			if !w.handleLoopError("windows", err, backoff) {
+				return
+			}
 			continue
 		}
+
+		// Success, reset backoff
+		w.resetBackoff(backoff)
 
 		w.streamMu.Lock()
 		pathMap := w.streams["pathMap"].(map[uintptr]*watchedPath)
@@ -210,11 +217,13 @@ func (w *watcher) addWatch(watchPath *WatchPath) error {
 		return newError("createHandle", path, err)
 	}
 
+	// Allocate a uint64 slice to ensure 8-byte alignment, then slice it as bytes
+	alignedBuf := make([]uint64, (w.bufferSize+7)/8)
 	wp := &watchedPath{
 		handle: handle,
 		path:   path,
 		key:    key,
-		buffer: make([]byte, w.bufferSize),
+		buffer: unsafe.Slice((*byte)(unsafe.Pointer(&alignedBuf[0])), len(alignedBuf)*8),
 	}
 
 	if _, err := windows.CreateIoCompletionPort(handle, iocp, key, 0); err != nil {

@@ -176,6 +176,7 @@ func (w *watcher) runInotifyLoop(ctx context.Context, p *inotify, done chan stru
 
 	buf := make([]byte, w.bufferSize)
 	epollEvents := make([]unix.EpollEvent, 2) // Waiting on two FDs: inotify and eventfd
+	backoff := newBackoffState()
 
 	for {
 		nEvents, err := unix.EpollWait(epfd, epollEvents, -1)
@@ -183,11 +184,17 @@ func (w *watcher) runInotifyLoop(ctx context.Context, p *inotify, done chan stru
 			if err == unix.EINTR {
 				continue
 			}
-			w.logError("inotify epollWait error: %v", err)
-			return
+
+			if !w.handleLoopError("inotify", err, backoff) {
+				return
+			}
+			continue
 		}
 
-		for i := 0; i < nEvents; i++ {
+		// Success, reset backoff
+		w.resetBackoff(backoff)
+
+		for i := range nEvents {
 			if epollEvents[i].Fd == int32(eventFD) {
 				// Shutdown signal
 				return

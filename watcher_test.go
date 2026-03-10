@@ -669,3 +669,59 @@ func performOperations(t *testing.T, basePath string, numOps int) map[string]str
 	time.Sleep(10 * time.Millisecond)
 	return expectedPaths
 }
+
+func TestBackoffState(t *testing.T) {
+	w := &watcher{}
+
+	t.Run("Initialization", func(t *testing.T) {
+		state := newBackoffState()
+		assert.Equal(t, 0, state.retryCount)
+		assert.Equal(t, 10*time.Millisecond, state.duration)
+	})
+
+	t.Run("ExponentialBackoff", func(t *testing.T) {
+		state := newBackoffState()
+		err := errors.New("test error")
+
+		// First error
+		ok := w.handleLoopError("test", err, state)
+		assert.True(t, ok)
+		assert.Equal(t, 1, state.retryCount)
+		assert.Equal(t, 20*time.Millisecond, state.duration)
+
+		// Second error
+		ok = w.handleLoopError("test", err, state)
+		assert.True(t, ok)
+		assert.Equal(t, 2, state.retryCount)
+		assert.Equal(t, 40*time.Millisecond, state.duration)
+	})
+
+	t.Run("MaxRetriesExceeded", func(t *testing.T) {
+		state := newBackoffState()
+		err := errors.New("terminal error")
+
+		// Trigger 5 retries (maxRetries is 5)
+		for i := 0; i < 5; i++ {
+			ok := w.handleLoopError("test", err, state)
+			assert.True(t, ok)
+		}
+
+		// The 6th retry should fail
+		ok := w.handleLoopError("test", err, state)
+		assert.False(t, ok)
+		assert.Equal(t, 6, state.retryCount)
+	})
+
+	t.Run("ResetBackoff", func(t *testing.T) {
+		state := newBackoffState()
+		err := errors.New("transient error")
+
+		w.handleLoopError("test", err, state)
+		w.handleLoopError("test", err, state)
+		assert.Equal(t, 2, state.retryCount)
+
+		w.resetBackoff(state)
+		assert.Equal(t, 0, state.retryCount)
+		assert.Equal(t, 10*time.Millisecond, state.duration)
+	})
+}
