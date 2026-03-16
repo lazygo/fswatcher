@@ -8,7 +8,6 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
-	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -517,7 +516,7 @@ func (w *watcher) scanDirectory(path string) {
 			w.pathMu.RLock()
 			var parentWatch *WatchPath
 			for watchedDir, wp := range w.watchedPaths {
-				if strings.HasPrefix(filepath.Clean(path), filepath.Clean(watchedDir)) {
+				if path == watchedDir || isSubpath(watchedDir, path) {
 					parentWatch = wp
 					break
 				}
@@ -583,8 +582,7 @@ func (w *watcher) handlePlatformEvent(event WatchEvent) {
 	var parentWatch *WatchPath
 	// Find the base watch path that this event belongs to
 	for watchedDir, wp := range w.watchedPaths {
-		// Use filepath.Clean to handle trailing slashes consistently
-		if strings.HasPrefix(filepath.Clean(event.Path), filepath.Clean(watchedDir)) {
+		if event.Path == watchedDir || isSubpath(watchedDir, event.Path) {
 			parentWatch = wp
 			break
 		}

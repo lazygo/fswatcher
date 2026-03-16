@@ -53,6 +53,17 @@ func (f *patternFilter) ShouldInclude(path string) bool {
 	return false
 }
 
+// isSubpath reports whether the child path is inside the parent directory
+func isSubpath(parent, child string) bool {
+	rel, err := filepath.Rel(parent, child)
+	return err == nil && rel != "." && rel != ".." && !startsWithDotDot(rel)
+}
+
+// startsWithDotDot checks if a relative path string starts with "../"
+func startsWithDotDot(rel string) bool {
+	return len(rel) >= 2 && rel[:2] == ".."
+}
+
 // isSystemFile checks if a path is likely a temporary or system-generated file
 func isSystemFile(path string) bool {
 	base := filepath.Base(path)

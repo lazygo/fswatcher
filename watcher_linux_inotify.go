@@ -418,13 +418,3 @@ func (p *inotify) removeWatch(path string) error {
 	return nil
 }
 
-// isSubpath reports whether the child path is inside the parent directory
-func isSubpath(parent, child string) bool {
-	rel, err := filepath.Rel(parent, child)
-	return err == nil && rel != "." && rel != ".." && !startsWithDotDot(rel)
-}
-
-// startsWithDotDot checks if a relative path string starts with "../"
-func startsWithDotDot(rel string) bool {
-	return len(rel) >= 2 && rel[:2] == ".."
-}
