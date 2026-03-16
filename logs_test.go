@@ -74,6 +74,30 @@ func TestLogger_Output(t *testing.T) {
 	})
 }
 
+func TestLogger_NilLogger(t *testing.T) {
+	w := &watcher{logger: nil}
+	// None of these should panic when logger is nil
+	w.logDebug("debug")
+	w.logInfo("info")
+	w.logWarn("warn")
+	w.logError("error")
+	w.log(SeverityInfo, "generic")
+}
+
+func TestLogger_GenericLog(t *testing.T) {
+	buf := &bytes.Buffer{}
+	handler := &mockHandler{buf: buf}
+	logger := slog.New(handler)
+
+	w := &watcher{
+		logger:   logger,
+		severity: SeverityDebug,
+	}
+
+	w.log(SeverityWarn, "generic warn", "code", 42)
+	assert.Contains(t, buf.String(), "generic warn code=42")
+}
+
 func TestLogger_LevelFiltering(t *testing.T) {
 	// Use a real TextHandler to test actual level filtering
 	buf := &bytes.Buffer{}

@@ -495,6 +495,64 @@ func TestWatcher(t *testing.T) {
 		cancel()
 	})
 
+	t.Run("AggregationMerging", func(t *testing.T) {
+		dir, err := os.MkdirTemp("", "agg-*")
+		require.NoError(t, err)
+		defer func() { _ = os.RemoveAll(dir) }()
+		dir, err = filepath.EvalSymlinks(dir)
+		require.NoError(t, err)
+
+		cooldown := 100 * time.Millisecond
+		w, err := New(
+			WithPath(dir),
+			WithCooldown(cooldown),
+			WithSeverity(SeverityNone),
+		)
+		require.NoError(t, err)
+
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+		go func() { _ = w.Watch(ctx) }()
+		time.Sleep(100 * time.Millisecond)
+		require.True(t, w.IsRunning())
+
+		var collected []WatchEvent
+		var mu sync.Mutex
+		eventsDone := make(chan struct{})
+		go func() {
+			for ev := range w.Events() {
+				mu.Lock()
+				collected = append(collected, ev)
+				mu.Unlock()
+			}
+			close(eventsDone)
+		}()
+
+		// Write to the same file 5 times rapidly — should produce fewer than 5 events
+		filePath := filepath.Join(dir, "rapid.txt")
+		for i := range 5 {
+			require.NoError(t, os.WriteFile(filePath, []byte(fmt.Sprintf("write-%d", i)), 0644))
+		}
+
+		time.Sleep(cooldown * 3)
+
+		cancel()
+		<-eventsDone
+
+		mu.Lock()
+		defer mu.Unlock()
+
+		var fileEvents []WatchEvent
+		for _, ev := range collected {
+			if ev.Path == filePath {
+				fileEvents = append(fileEvents, ev)
+			}
+		}
+
+		assert.NotEmpty(t, fileEvents, "expected at least one event for the file")
+		assert.Less(t, len(fileEvents), 5, "5 rapid writes should be aggregated into fewer than 5 events")
+	})
+
 	t.Run("Close", func(t *testing.T) {
 		w := &watcher{
 			done:           make(chan struct{}),
