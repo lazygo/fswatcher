@@ -2,6 +2,7 @@ package fswatcher
 
 import (
 	"math/rand"
+	"slices"
 	"sync"
 	"testing"
 	"time"
@@ -86,18 +87,9 @@ func TestEventAggregator(t *testing.T) {
 				t.Errorf("Expected 2 event types, got %d", len(ev.Types))
 			}
 			// Check if both types are present
-			hasCreate := false
-			hasMod := false
-			for _, tp := range ev.Types {
-				if tp == EventCreate {
-					hasCreate = true
-				}
-				if tp == EventMod {
-					hasMod = true
-				}
-			}
-			if !hasCreate || !hasMod {
-				t.Errorf("Merged event missing types: Create=%v, Mod=%v", hasCreate, hasMod)
+			if !slices.Contains(ev.Types, EventCreate) || !slices.Contains(ev.Types, EventMod) {
+				t.Errorf("Merged event missing types: Create=%v, Mod=%v",
+					slices.Contains(ev.Types, EventCreate), slices.Contains(ev.Types, EventMod))
 			}
 		case <-time.After(100 * time.Millisecond):
 			t.Fatal("Timeout waiting for aggregated event")
@@ -289,14 +281,7 @@ func TestEventAggregator(t *testing.T) {
 
 		select {
 		case ev := <-events:
-			hasOverflow := false
-			for _, tp := range ev.Types {
-				if tp == EventOverflow {
-					hasOverflow = true
-					break
-				}
-			}
-			if !hasOverflow {
+			if !slices.Contains(ev.Types, EventOverflow) {
 				t.Errorf("EventOverflow was not preserved in aggregated event; got types: %v", ev.Types)
 			}
 		case <-time.After(100 * time.Millisecond):
@@ -355,14 +340,7 @@ func TestUniqueEventTypes(t *testing.T) {
 	t.Run("OverflowPreserved", func(t *testing.T) {
 		in := []EventType{EventCreate, EventOverflow, EventCreate, EventOverflow}
 		out := uniqueEventTypes(in)
-		hasOverflow := false
-		for _, et := range out {
-			if et == EventOverflow {
-				hasOverflow = true
-				break
-			}
-		}
-		if !hasOverflow {
+		if !slices.Contains(out, EventOverflow) {
 			t.Error("EventOverflow was silently dropped by uniqueEventTypes; maxEventType must include EventOverflow")
 		}
 	})
