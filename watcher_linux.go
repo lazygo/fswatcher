@@ -50,10 +50,6 @@ func (w *watcher) startPlatform(ctx context.Context) (<-chan struct{}, error) {
 
 	done := make(chan struct{})
 	go runLoop(ctx, platform, done)
-
-	if w.readyChan != nil {
-		close(w.readyChan)
-	}
 	return done, nil
 }
 

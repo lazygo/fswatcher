@@ -52,10 +52,6 @@ func (w *watcher) startPlatform(ctx context.Context) (<-chan struct{}, error) {
 	done := make(chan struct{})
 
 	go w.runKqueueLoop(ctx, kq, done)
-
-	if w.readyChan != nil {
-		close(w.readyChan)
-	}
 	return done, nil
 }
 

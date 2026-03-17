@@ -85,10 +85,6 @@ func (w *watcher) startPlatform(ctx context.Context) (<-chan struct{}, error) {
 
 	go w.runWindowsLoop(iocp, done)
 
-	if w.readyChan != nil {
-		close(w.readyChan)
-	}
-
 	return done, nil
 }
 

@@ -85,7 +85,7 @@ type watcher struct {
 	pathMu       sync.RWMutex
 
 	// Synchronization and logs
-	logMu sync.Mutex
+	logMu   sync.Mutex
 	logPath string
 	logFile *os.File
 	logger  *slog.Logger
@@ -254,17 +254,26 @@ func (w *watcher) Watch(ctx context.Context) error {
 		return err
 	}
 
-	// Start watching the initial set of paths
+	// Start watching the initial set of paths synchronously.
+	// If any path fails to initialize, fail fast and return an error.
 	w.pathMu.RLock()
+	initialPaths := make([]*WatchPath, 0, len(w.watchedPaths))
 	for _, wp := range w.watchedPaths {
-		watchPath := wp
-		go func() {
-			if err := w.addWatch(watchPath); err != nil {
-				w.logError("Failed to start watching initial path %q: %v", watchPath.Path, err)
-			}
-		}()
+		initialPaths = append(initialPaths, wp)
 	}
 	w.pathMu.RUnlock()
+
+	for _, watchPath := range initialPaths {
+		if err := w.addWatch(watchPath); err != nil {
+			cancel()
+			<-done
+			return newError("startWatch", watchPath.Path, err)
+		}
+	}
+
+	if w.readyChan != nil {
+		close(w.readyChan)
+	}
 
 	// Wait for the context to be canceled
 	<-watchCtx.Done()
@@ -514,15 +523,7 @@ func (w *watcher) scanDirectory(path string) {
 
 		// If it's a directory and we are not recursive, don't walk into it
 		if info.IsDir() {
-			w.pathMu.RLock()
-			var parentWatch *WatchPath
-			for watchedDir, wp := range w.watchedPaths {
-				if path == watchedDir || isSubpath(watchedDir, path) {
-					parentWatch = wp
-					break
-				}
-			}
-			w.pathMu.RUnlock()
+			parentWatch := w.findMostSpecificWatchPath(filePath)
 
 			if parentWatch != nil && parentWatch.Depth == WatchTopLevel {
 				return filepath.SkipDir
@@ -572,6 +573,26 @@ func (w *watcher) resetBackoff(state *backoffState) {
 	state.duration = 10 * time.Millisecond
 }
 
+// findMostSpecificWatchPath resolves the most specific watched root for a path.
+func (w *watcher) findMostSpecificWatchPath(path string) *WatchPath {
+	w.pathMu.RLock()
+	defer w.pathMu.RUnlock()
+
+	var parentWatch *WatchPath
+	bestMatchLen := -1
+
+	for watchedDir, wp := range w.watchedPaths {
+		if path == watchedDir || isSubpath(watchedDir, path) {
+			if n := len(watchedDir); n > bestMatchLen {
+				bestMatchLen = n
+				parentWatch = wp
+			}
+		}
+	}
+
+	return parentWatch
+}
+
 // handlePlatformEvent processes raw events from the OS
 func (w *watcher) handlePlatformEvent(event WatchEvent) {
 	if w.isShuttingDown.Load() {
@@ -585,16 +606,7 @@ func (w *watcher) handlePlatformEvent(event WatchEvent) {
 	}
 
 	// Platform-agnostic depth filtering
-	w.pathMu.RLock()
-	var parentWatch *WatchPath
-	// Find the base watch path that this event belongs to
-	for watchedDir, wp := range w.watchedPaths {
-		if event.Path == watchedDir || isSubpath(watchedDir, event.Path) {
-			parentWatch = wp
-			break
-		}
-	}
-	w.pathMu.RUnlock()
+	parentWatch := w.findMostSpecificWatchPath(event.Path)
 
 	// If the parent watch is configured for top-level only, check the depth
 	if parentWatch != nil && parentWatch.Depth == WatchTopLevel {

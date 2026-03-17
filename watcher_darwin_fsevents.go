@@ -319,10 +319,6 @@ func (w *watcher) startPlatform(ctx context.Context) (<-chan struct{}, error) {
 		close(platformIsDone)
 	}()
 
-	if w.readyChan != nil {
-		close(w.readyChan)
-	}
-
 	return platformIsDone, nil
 }
 
