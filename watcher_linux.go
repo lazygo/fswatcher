@@ -64,7 +64,7 @@ func (w *watcher) addWatch(watchPath *WatchPath) error {
 		return err
 	}
 
-	w.logInfo("Added watch for %s", watchPath.Path)
+	w.logInfo("Added watch", "path", watchPath.Path)
 	return nil
 }
 
@@ -79,6 +79,6 @@ func (w *watcher) removeWatch(path string) error {
 		return fmt.Errorf("failed to remove watch for %s: %w", path, err)
 	}
 
-	w.logInfo("Platform stopped watching path: %s", path)
+	w.logInfo("Platform stopped watching path", "path", path)
 	return nil
 }

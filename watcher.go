@@ -332,18 +332,22 @@ func (w *watcher) AddPath(path string, options ...PathOption) error {
 	}
 
 	w.pathMu.Lock()
-	defer w.pathMu.Unlock()
-
 	if _, exists := w.watchedPaths[wp.Path]; exists {
+		w.pathMu.Unlock()
 		return newError("AddPath", wp.Path, errors.New("path is already being watched"))
 	}
+	// Reserve first so concurrent AddPath calls for the same path are deterministic.
+	w.watchedPaths[wp.Path] = wp
+	w.pathMu.Unlock()
 
 	if err := w.addWatch(wp); err != nil {
+		w.pathMu.Lock()
+		delete(w.watchedPaths, wp.Path)
+		w.pathMu.Unlock()
 		return err
 	}
 
-	w.watchedPaths[wp.Path] = wp
-	w.logInfo("Successfully added new watch path: %s (Depth: %d)", wp.Path, wp.Depth)
+	w.logInfo("Successfully added new watch path", "path", wp.Path, "depth", wp.Depth)
 	return nil
 }
 
@@ -359,20 +363,18 @@ func (w *watcher) DropPath(path string) error {
 	}
 
 	w.pathMu.Lock()
-	defer w.pathMu.Unlock()
-
 	if _, exists := w.watchedPaths[wp.Path]; !exists {
+		w.pathMu.Unlock()
 		return newError("DropPath", path, errors.New("path is not being watched"))
 	}
+	delete(w.watchedPaths, wp.Path)
+	w.pathMu.Unlock()
 
 	if err := w.removeWatch(wp.Path); err != nil {
-		w.logError("Platform backend failed to remove watch for %s: %v", wp.Path, err)
-		// still attempt to remove from our state
+		w.logError("Platform backend failed to remove watch", "path", wp.Path, "error", err)
 	}
 
-	// Remove the path from our internal state
-	delete(w.watchedPaths, wp.Path)
-	w.logInfo("Successfully removed watch path: %s", wp.Path)
+	w.logInfo("Successfully removed watch path", "path", wp.Path)
 	return nil
 }
 
@@ -477,7 +479,12 @@ func (w *watcher) initLogger() error {
 
 // sendToChannel sends an event to the appropriate channel
 func (w *watcher) sendToChannel(event WatchEvent) {
-	w.logDebug("Raw event: %s", event.String())
+	w.logDebug("Raw event",
+		"id", event.ID,
+		"path", event.Path,
+		"types", event.Types,
+		"flags", event.Flags,
+		"time", event.Time)
 	select {
 	case w.events <- event:
 		atomic.AddInt64(&w.stats.eventsProcessed, 1)
@@ -486,11 +493,17 @@ func (w *watcher) sendToChannel(event WatchEvent) {
 		select {
 		case w.dropped <- event:
 			atomic.AddInt64(&w.stats.eventsDropped, 1)
-			w.log(SeverityWarn, "Event channel full, event sent to dropped channel: %s", event.String())
+			w.logWarn("Event channel full, event sent to dropped channel",
+				"id", event.ID,
+				"path", event.Path,
+				"types", event.Types)
 		default:
 			// Both channels are full, the event is lost
 			atomic.AddInt64(&w.stats.eventsLost, 1)
-			w.log(SeverityWarn, "Event and dropped channels full, event lost: %s", event.String())
+			w.logWarn("Event and dropped channels full, event lost",
+				"id", event.ID,
+				"path", event.Path,
+				"types", event.Types)
 		}
 	}
 }
@@ -501,7 +514,7 @@ func (w *watcher) scanDirectory(path string) {
 		return
 	}
 
-	w.logInfo("Starting manual scan of directory: %s", path)
+	w.logInfo("Starting manual scan of directory", "path", path)
 
 	err := filepath.Walk(path, func(filePath string, info os.FileInfo, err error) error {
 		if err != nil {
@@ -534,9 +547,9 @@ func (w *watcher) scanDirectory(path string) {
 	})
 
 	if err != nil {
-		w.logError("Manual scan failed for %s: %v", path, err)
+		w.logError("Manual scan failed", "path", path, "error", err)
 	} else {
-		w.logInfo("Manual scan completed for: %s", path)
+		w.logInfo("Manual scan completed", "path", path)
 	}
 }
 
@@ -556,10 +569,10 @@ func newBackoffState() *backoffState {
 // handleLoopError applies exponential backoff and returns false if retries are exhausted
 func (w *watcher) handleLoopError(platform string, err error, state *backoffState) bool {
 	const maxRetries = 5
-	w.logError("%s error: %v", platform, err)
+	w.logError("Platform loop error", "platform", platform, "error", err)
 	state.retryCount++
 	if state.retryCount > maxRetries {
-		w.logError("%s: too many errors, shutting down platform", platform)
+		w.logError("Too many platform loop errors, shutting down", "platform", platform, "retries", state.retryCount)
 		return false
 	}
 	time.Sleep(state.duration)
@@ -614,31 +627,36 @@ func (w *watcher) handlePlatformEvent(event WatchEvent) {
 		eventDir := filepath.Dir(event.Path)
 		// If the event's directory is not the same as the watched path, it's a subdirectory event so will be ignored
 		if filepath.Clean(eventDir) != filepath.Clean(parentWatch.Path) {
-			w.log(SeverityDebug, "Filtered by depth: %s", event.Path)
+			w.logDebug("Filtered by depth", "path", event.Path)
 			atomic.AddInt64(&w.stats.eventsFiltered, 1)
 			return
 		}
 	}
 
-	w.logDebug("Received event: %s", event.String())
+	w.logDebug("Received event",
+		"id", event.ID,
+		"path", event.Path,
+		"types", event.Types,
+		"flags", event.Flags,
+		"time", event.Time)
 
 	// Filter system files
 	if isSystemFile(event.Path) {
-		w.log(SeverityDebug, "Filtered system file: %s", event.Path)
+		w.logDebug("Filtered system file", "path", event.Path)
 		atomic.AddInt64(&w.stats.eventsFiltered, 1)
 		return
 	}
 
 	// Filter by global patterns
 	if !w.filter.ShouldInclude(event.Path) {
-		w.log(SeverityDebug, "Filtered by pattern: %s", event.Path)
+		w.logDebug("Filtered by pattern", "path", event.Path)
 		atomic.AddInt64(&w.stats.eventsFiltered, 1)
 		return
 	}
 
 	// Filter by per-path patterns
 	if parentWatch != nil && parentWatch.filter != nil && !parentWatch.filter.ShouldInclude(event.Path) {
-		w.log(SeverityDebug, "Filtered by path pattern: %s", event.Path)
+		w.logDebug("Filtered by path pattern", "path", event.Path)
 		atomic.AddInt64(&w.stats.eventsFiltered, 1)
 		return
 	}
@@ -652,7 +670,7 @@ func (w *watcher) handlePlatformEvent(event WatchEvent) {
 			}
 		}
 		if len(filtered) == 0 {
-			w.log(SeverityDebug, "Filtered by event mask: %s", event.Path)
+			w.logDebug("Filtered by event mask", "path", event.Path)
 			atomic.AddInt64(&w.stats.eventsFiltered, 1)
 			return
 		}

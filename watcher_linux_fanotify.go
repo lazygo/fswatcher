@@ -125,7 +125,7 @@ func (w *watcher) runFanotifyLoop(ctx context.Context, p *fanotify, done chan st
 			if err == nil && path != "" {
 				w.dispatchFanotifyEvent(path, meta.Mask)
 			} else if err != nil {
-				w.logDebug("fanotify resolve error: %v", err)
+				w.logDebug("fanotify resolve error", "error", err)
 			}
 
 			offset += int(meta.Event_len)
