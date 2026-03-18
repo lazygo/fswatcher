@@ -27,6 +27,51 @@ type fanotify struct {
 	mu              sync.RWMutex
 }
 
+func removeFSIDFromOrder(order []uint64, fsid uint64) []uint64 {
+	for i, v := range order {
+		if v == fsid {
+			return append(order[:i], order[i+1:]...)
+		}
+	}
+	return order
+}
+
+func (p *fanotify) getMountCache(fsid uint64) (string, bool) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+
+	path, exists := p.mountCache[fsid]
+	if !exists {
+		return "", false
+	}
+
+	// Promote recently used FSIDs to the back.
+	p.mountCacheOrder = removeFSIDFromOrder(p.mountCacheOrder, fsid)
+	p.mountCacheOrder = append(p.mountCacheOrder, fsid)
+	return path, true
+}
+
+func (p *fanotify) setMountCache(fsid uint64, path string) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+
+	if _, exists := p.mountCache[fsid]; exists {
+		p.mountCache[fsid] = path
+		p.mountCacheOrder = removeFSIDFromOrder(p.mountCacheOrder, fsid)
+		p.mountCacheOrder = append(p.mountCacheOrder, fsid)
+		return
+	}
+
+	if len(p.mountCacheOrder) >= mountCacheMaxSize {
+		evicted := p.mountCacheOrder[0]
+		p.mountCacheOrder = p.mountCacheOrder[1:]
+		delete(p.mountCache, evicted)
+	}
+
+	p.mountCache[fsid] = path
+	p.mountCacheOrder = append(p.mountCacheOrder, fsid)
+}
+
 // newFanotify tries to initialize fanotify with directory monitoring support
 func newFanotify() (*fanotify, error) {
 	// FAN_REPORT_DFID_NAME is required for FAN_CREATE, FAN_DELETE, etc
@@ -67,21 +112,50 @@ func (w *watcher) runFanotifyLoop(ctx context.Context, p *fanotify, done chan st
 		close(done)
 	}()
 
+	eventFD, err := unix.Eventfd(0, unix.EFD_NONBLOCK|unix.EFD_CLOEXEC)
+	if err != nil {
+		w.logError("fanotify eventfd error", "error", err)
+		return
+	}
+	defer unix.Close(eventFD)
+
+	go func() {
+		<-ctx.Done()
+		var val uint64 = 1
+		_, _ = unix.Write(eventFD, (*(*[8]byte)(unsafe.Pointer(&val)))[:])
+	}()
+
 	const bufSize = 64 * 1024
 	buf := make([]byte, bufSize)
 	backoff := newBackoffState()
+	pollFds := []unix.PollFd{
+		{Fd: int32(p.fd), Events: unix.POLLIN},
+		{Fd: int32(eventFD), Events: unix.POLLIN},
+	}
 
 	for {
-		select {
-		case <-ctx.Done():
+		_, pollErr := unix.Poll(pollFds, -1)
+		if pollErr != nil {
+			if pollErr == unix.EINTR {
+				continue
+			}
+			if !w.handleLoopError("fanotify", pollErr, backoff) {
+				return
+			}
+			continue
+		}
+
+		if pollFds[1].Revents&unix.POLLIN != 0 {
 			return
-		default:
+		}
+
+		if pollFds[0].Revents&(unix.POLLIN|unix.POLLERR|unix.POLLHUP|unix.POLLNVAL) == 0 {
+			continue
 		}
 
 		n, readErr := unix.Read(p.fd, buf)
 		if n <= 0 {
 			if readErr == unix.EAGAIN || readErr == unix.EWOULDBLOCK {
-				time.Sleep(5 * time.Millisecond)
 				continue
 			}
 			if ctx.Err() != nil {
@@ -170,10 +244,7 @@ func (w *watcher) parseFanotifyInfo(p *fanotify, infoBuf []byte) (string, error)
 			handleBytes := record[headerSize+fsidSize:]
 
 			// Try to resolve from cache first
-			p.mu.RLock()
-			cachedPath, exists := p.mountCache[fsid]
-			p.mu.RUnlock()
-
+			cachedPath, exists := p.getMountCache(fsid)
 			if exists {
 				dirPath = cachedPath
 			}
@@ -196,9 +267,7 @@ func (w *watcher) parseFanotifyInfo(p *fanotify, infoBuf []byte) (string, error)
 						if resolved != "" {
 							dirPath = resolved
 							// Store in cache for future events on this filesystem
-							p.mu.Lock()
-							p.mountCache[fsid] = resolved
-							p.mu.Unlock()
+							p.setMountCache(fsid, resolved)
 						}
 					}
 				}
