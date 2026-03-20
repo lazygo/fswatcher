@@ -41,19 +41,19 @@ FSWatcher uses native OS APIs for efficient, low-overhead monitoring with near-z
 
 On macOS, FSWatcher supports two backends:
 
-1.  **FSEvents (Default):** Uses the native macOS FSEvents framework. This is the recommended backend for macOS as it provides the most efficient and comprehensive monitoring. It requires CGO (`CGO_ENABLED=1`).
-2.  **kqueue (Pure Go):** Uses the BSD `kernel queue` notification interface. This allows to build a static binary without CGO (`CGO_ENABLED=0`), with a shared backend that can be used with other BSD systems (FreeBSD, OpenBSD, NetBSD, DragonFly).
+1.  **FSEvents (Default):** Uses the native macOS FSEvents framework. Recommended for macOS — provides the most efficient and comprehensive monitoring. Requires CGO (`CGO_ENABLED=1`)
+2.  **kqueue (Pure Go):** Uses the BSD `kernel queue` notification interface. Allows building a static binary without CGO (`CGO_ENABLED=0`), with a shared backend usable on FreeBSD, OpenBSD, NetBSD, and DragonFly
 
 **Why use FSEvents (CGO)?**
 The `FSEvents` API is designed specifically for file system monitoring and includes OS-level coalescing. This makes it significantly more accurate and CPU-efficient than `kqueue` for high-volume operations. Benchmarks show `FSEvents` achieves 100% path detection accuracy where **`kqueue` may miss up to 30% of events** for short-lived files under heavy load.
 
-To use the `kqueue` backend on macOS, simply disable CGO when building your application:
+To use the `kqueue` backend on macOS, disable CGO when building:
 
 ```bash
 CGO_ENABLED=0 go build
 ```
 
-The library automatically selects the correct implementation based on the build tags. For BSD systems, `kqueue` is the default and only backend (CGO is not required).
+The library automatically selects the correct implementation based on the build tags. For BSD systems, `kqueue` is the default and only backend.
 
 ## Why FSWatcher
 
@@ -125,15 +125,19 @@ Customize the watcher's behavior using functional options passed to `fswatcher.N
 
 | Option                      | Description | Default |
 |:----------------------------| :--- | :--- |
-| `WithPath(path, ...)`       | Adds an initial directory to watch. Must be a valid directory path. Can be called multiple times to watch multiple directories. Takes optional `PathOption` values, such as `WithDepth(WatchTopLevel)` to disable recursive watching for that specific path. | Current directory |
-| `WithCooldown(d)`           | Sets the debouncing cooldown period. Events for the same path arriving within this duration will be merged. | `100ms` |
-| `WithBufferSize(size)`      | Sets the size of the main event channel. | `4096` |
-| `WithIncRegex(patterns...)` | Sets a slice of regex patterns for paths to include. If a path matches any of these patterns, it will be processed. If this option is not used, all non-excluded paths are processed by default. | (none) |
-| `WithExcRegex(patterns...)` | Sets a slice of regex patterns for paths to exclude. If a path matches any of these patterns, it will be ignored. Exclusions always take precedence over inclusions. | (none) |
-| `WithSeverity(level)`       | Sets the logging verbosity (`SeverityDebug`, `SeverityInfo`, `SeverityWarn`, `SeverityError`). | `SeverityWarn` |
-| `WithLogFile(path)`         | Sets a file for logging. Use `"stdout"` to log to the console or `""` to disable. | (disabled) |
-| `WithLinuxPlatform(p)`      | Sets a specific backend (`PlatformInotify` or `PlatformFanotify`) on Linux. | `PlatformInotify` |
-| `WithDepth(depth)`          | Sets the watch depth for a specific path (`WatchNested` or `WatchTopLevel`). This option is passed to `WithPath`. | `WatchNested` |
+| `WithPath(path, ...)`       | Adds an initial directory to watch. Can be called multiple times. Accepts optional `PathOption` values like `WithDepth`, `WithEventMask`, `WithPathIncRegex`, etc | Current directory |
+| `WithCooldown(d)`           | Sets the debouncing cooldown period. Events for the same path arriving within this duration will be merged | `100ms` |
+| `WithBufferSize(size)`      | Sets the size of the main event channel | `4096` |
+| `WithIncRegex(patterns...)` | Global include regex patterns — only matching paths are processed. If not set, all non-excluded paths are processed | (none) |
+| `WithExcRegex(patterns...)` | Global exclude regex patterns — matching paths are ignored. Exclusions take precedence over inclusions | (none) |
+| `WithSeverity(level)`       | Sets the logging verbosity (`SeverityDebug`, `SeverityInfo`, `SeverityWarn`, `SeverityError`) | `SeverityWarn` |
+| `WithLogFile(path)`         | Sets a file for logging. Use `"stdout"` to log to the console or `""` to disable | (disabled) |
+| `WithLinuxPlatform(p)`      | Sets a specific backend (`PlatformInotify` or `PlatformFanotify`) on Linux | `PlatformInotify` |
+| `WithDepth(depth)`          | Sets the watch depth for a path (`WatchNested` or `WatchTopLevel`). Passed to `WithPath` | `WatchNested` |
+| `WithEventMask(types...)`   | Filters event types for a specific path. Only the listed types are forwarded to `Events()`, everything else is dropped. Passed to `WithPath` | (all types) |
+| `WithPathIncRegex(patterns...)` | Include regex patterns scoped to a specific path, independent of the global `WithIncRegex`. Passed to `WithPath` | (none) |
+| `WithPathExcRegex(patterns...)` | Exclude regex patterns scoped to a specific path, independent of the global `WithExcRegex`. Passed to `WithPath` | (none) |
+| `WithPathFilter(filter)`    | Custom `PathFilter` implementation for a specific path. Passed to `WithPath` | (none) |
 
 ## Methods
 
@@ -141,14 +145,14 @@ Once you have a `Watcher` instance from `New()`, you can use the following metho
 
 | Method | Description |
 | :--- | :--- |
-| `Watch(ctx)` | Starts the watcher. This is a **blocking** call that runs until the provided `context.Context` is canceled. It should almost always be run in a separate goroutine. |
-| `Events()` | Returns a read-only channel (`<-chan WatchEvent`) where you receive file system events. You should range over this channel in a goroutine to process events. |
-| `AddPath(path)` | Adds a new directory path for the watcher to monitor at runtime. |
-| `DropPath(path)` | Stops monitoring a directory path at runtime. |
-| `Close()` | Initiates a graceful shutdown of the watcher. This is an alternative to canceling the context passed to `Watch()`. |
-| `IsRunning()` | Returns `true` if the watcher's `Watch()` method is currently running. |
-| `Stats()` | Returns a `WatcherStats` struct containing runtime statistics like uptime and the number of events processed. |
-| `Dropped()` | Returns a read-only channel that receives events that were dropped because the main `Events()` channel was full. |
+| `Watch(ctx)` | Starts the watcher. Blocking — runs until the context is canceled. Run in a goroutine. A watcher instance is single-use: after `Watch()` returns, create a new watcher with `New()` |
+| `Events()` | Returns a read-only channel (`<-chan WatchEvent`) for receiving file system events |
+| `AddPath(path)` | Adds a new directory to monitor at runtime. Safe to call concurrently with `DropPath()` |
+| `DropPath(path)` | Stops monitoring a directory at runtime. Safe to call concurrently with `AddPath()` |
+| `Close()` | Initiates a graceful shutdown — alternative to canceling the context |
+| `IsRunning()` | Returns `true` if `Watch()` is currently running |
+| `Stats()` | Returns a `WatcherStats` struct with runtime statistics (uptime, events processed, etc.) |
+| `Dropped()` | Returns a read-only channel for events dropped because the main `Events()` channel was full |
 
 ## Logging
 
@@ -156,42 +160,37 @@ FSWatcher includes a built-in structured logger to help with debugging and monit
 
 ### Log Severity
 
-The log severity determines the minimum severity of messages that will be logged. The available levels are:
-
 | Level | Description |
 | :--- | :--- |
-| `SeverityNone` | No messages will be logged. |
-| `SeverityError` | 🚨 Only critical errors will be logged (e.g., platform failures). |
-| `SeverityWarn` | ⚠️ Errors and warnings will be logged (e.g., event queue overflows). This is the default. |
-| `SeverityInfo` | ℹ️ Errors, warnings, and informational messages will be logged (e.g., watcher start/stop, paths added/removed). |
-| `SeverityDebug` | 🐛 The most verbose level. Logs all messages, including detailed event processing steps (e.g., raw events, filtering, debouncing). |
+| `SeverityNone` | No messages logged |
+| `SeverityError` | 🚨 Only critical errors (e.g., platform failures) |
+| `SeverityWarn` | ⚠️ Errors and warnings (e.g., event queue overflows) — default |
+| `SeverityInfo` | ℹ️ Errors, warnings, and informational messages (e.g., watcher start/stop, paths added/removed) |
+| `SeverityDebug` | 🐛 Everything, including detailed event processing steps (raw events, filtering, debouncing) |
 
 ## Workflow
 
-The watcher operates in a clear, multi-stage pipeline that processes events concurrently. Each raw event from the OS goes through the following stages:
+The watcher operates in a clear, multi-stage pipeline. Each raw OS event goes through:
 
 | Stage | Description |
 | :--- | :--- |
-| **OS API** | The OS (`FSEvents`, `inotify`, `ReadDirectoryChangesW`) captures a raw file system event (e.g., a file was written to). |
-| **Filtering** | The event's path is checked against system file rules and user-defined regex patterns (`WithPath`, `WithIncRegex`, `WithExcRegex`). If it's a match for exclusion, it's dropped. |
-| **Debouncing** | The event is held for a configurable cooldown period (`WithCooldown`). If another event for the same path arrives during this time, they are aggregated into a single event containing all unique types and flags. The cooldown timer is reset on each new event. |
-| **User channel** | The final, clean `WatchEvent` is sent to the `Events()` channel for your application to consume. |
-
-This entire process ensures that your application receives high-quality, actionable events without the noise typically associated with raw file system notifications.
+| **OS API** | The OS (`FSEvents`, `inotify`, `ReadDirectoryChangesW`) captures a raw file system event |
+| **Filtering** | The path is checked against system file rules and regex patterns. Excluded paths are dropped |
+| **Debouncing** | The event is held for the cooldown period. Subsequent events for the same path are merged. The timer resets on each new event |
+| **User channel** | The final, clean `WatchEvent` is sent to `Events()` |
 
 ## Event Aggregation
 
 FSWatcher uses an `EventAggregator` to handle the noise of many OS events. For example, when you save a file, the OS might emit multiple "Edit" and "Chmod" events in rapid succession.
 
 The `EventAggregator` works by:
-1.  **Deduplication:** Multiple events for the same path within the `WithCooldown` window are merged.
-2.  **Type Collection:** The final `WatchEvent` contains all unique `EventType` values that occurred during the window (e.g., if a file was created and then modified, you'll get one event with both `Create` and `Edit` types).
-3.  **Flag Collection:** All platform-specific flags are also collected and merged.
-4.  **Timer-based Flushing:** A path's aggregated event is only sent to the `Events()` channel after no new events for that path have been received for the duration of the cooldown.
+1.  **Deduplication** — multiple events for the same path within the cooldown window are merged
+2.  **Type collection** — the final `WatchEvent` contains all unique `EventType` values (e.g., both `Create` and `Edit` if both occurred)
+3.  **Flag collection** — all platform-specific flags are collected and merged
+4.  **Deterministic ordering** — aggregated `Types` are sorted by enum order and `Flags` are sorted lexicographically
+5.  **Timer-based flushing** — an event is only sent after no new events for that path have arrived within the cooldown window
 
 ## Project structure
-
-The project is designed to be lightweight and easy to understand, with a clear separation between the core logic and platform-specific implementations.
 
 ```
 .
@@ -216,8 +215,6 @@ The project is designed to be lightweight and easy to understand, with a clear s
 
 ## Advanced usage
 
-This more advanced example shows how to configure the watcher with a specific path and log level, run it in a goroutine, and handle events in a `select` loop.
-
 ```go
 package main
 
@@ -231,46 +228,59 @@ import (
 
 func main() {
 
-	// Create a new fswatcher instance with options
 	fsw, err := fswatcher.New(
-		fswatcher.WithPath("./"), // Set the path to watch, you can add multiple paths
+		fswatcher.WithPath("./"),
 		fswatcher.WithSeverity(fswatcher.SeverityDebug),
 	)
 	if err != nil {
 		log.Fatalf("Failed to create watcher: %v", err)
 	}
 
-	// Start the watcher in a goroutine
-	ctx, _ := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
 	go func() {
-		log.Println("Watcher started.")
 		if err := fsw.Watch(ctx); err != nil && err != context.Canceled {
 			log.Printf("Watcher error: %v", err)
 		}
-		log.Println("Watcher stopped.")
 	}()
 
-	// Listen for events or a shutdown signal
 	for event := range fsw.Events() {
 		fmt.Printf("Received event:\n%s", event.String())
 	}
 }
 ```
 
+### Per-path event filtering
+
+Use `WithEventMask` to receive only specific event types on a given path, and `WithPathIncRegex` / `WithPathExcRegex` to scope regex filters to individual directories:
+
+```go
+fsw, err := fswatcher.New(
+    // Watch uploads — only care about new files and deletions, ignore edits
+    fswatcher.WithPath("/var/uploads",
+        fswatcher.WithEventMask(fswatcher.EventCreate, fswatcher.EventRemove),
+    ),
+    // Watch config — only .yaml files, all event types
+    fswatcher.WithPath("/etc/myapp",
+        fswatcher.WithPathIncRegex(`\.ya?ml$`),
+    ),
+)
+```
+
 ## FAQ
 
 **1. Why create another file watcher?**
 
-> FSWatcher was built to provide features like built-in debouncing and powerful filtering out-of-the-box, which often require manual implementation in other libraries. It also uses a modern Go API with functional options and context-based lifecycle management.
+> FSWatcher was built to provide features like built-in debouncing and powerful filtering out-of-the-box, which often require manual implementation in other libraries. It also uses a modern Go API with functional options and context-based lifecycle management
 
 **2. How does it handle a large number of files?**
 
-> It uses native OS APIs, which are highly efficient and do not rely on polling. This allows it to watch directories with hundreds of thousands of files without significant performance degradation, limited only by available system memory and OS-specific limits on file handles.
+> It uses native OS APIs, which are highly efficient and do not rely on polling. This allows it to watch directories with hundreds of thousands of files without significant performance degradation, limited only by available system memory and OS-specific limits on file handles
 
 **3. What happens if the event buffer is full?**
 
-> If the main event channel is full, the watcher will drop the oldest event and record it in a separate `dropped` events channel, which you can access via `watcher.Dropped()`. This prevents blocking the event processing pipeline under heavy load.
+> If the main event channel is full, the watcher drops the oldest event and records it in the `Dropped()` channel. This prevents blocking the event processing pipeline under heavy load
 
 **4. Can I watch files, or only directories?**
 
-> FSWatcher's API is designed to watch directories. This is to ensure consistent, predictable behavior across all platforms (macOS, Windows, and Linux). It is important to be aware of the limitations of the underlying Linux `inotify` backend cause it can struggle with very large or deep directory trees
+> FSWatcher watches directories only. This ensures consistent, predictable behavior across all platforms. Be aware that the Linux `inotify` backend can struggle with very large or deep directory trees

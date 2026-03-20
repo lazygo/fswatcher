@@ -20,7 +20,8 @@ func main() {
 	}
 
 	// Start the watcher in a goroutine
-	ctx, _ := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
 	go func() {
 		log.Println("Watcher started.")
 		if err := fsw.Watch(ctx); err != nil && err != context.Canceled {
