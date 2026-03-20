@@ -2,6 +2,7 @@ package fswatcher
 
 import (
 	"fmt"
+	"sort"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -134,13 +135,18 @@ func (ea *EventAggregator) addEvent(event WatchEvent) {
 	// Schedule or reschedule the flush for this specific path
 	path := event.Path
 	existing.timer = time.AfterFunc(ea.cooldown, func() {
-		ea.flushPath(path)
+		ea.flushPath(path, false)
 	})
 }
 
 // flushPath sends a single aggregated event and removes it from the map
-func (ea *EventAggregator) flushPath(path string) {
+func (ea *EventAggregator) flushPath(path string, force bool) {
 	ea.mu.Lock()
+	if !force && ea.isClosed.Load() {
+		ea.mu.Unlock()
+		return
+	}
+
 	aggregated, exists := ea.events[path]
 	if !exists {
 		ea.mu.Unlock()
@@ -149,18 +155,21 @@ func (ea *EventAggregator) flushPath(path string) {
 
 	// Remove from map before sending to avoid race with new events
 	delete(ea.events, path)
-	ea.mu.Unlock()
 
 	// Collect unique types and flags
 	types := make([]EventType, 0, len(aggregated.types))
 	for t := range aggregated.types {
 		types = append(types, t)
 	}
+	sort.Slice(types, func(i, j int) bool {
+		return types[i] < types[j]
+	})
 
 	flags := make([]string, 0, len(aggregated.flags))
 	for f := range aggregated.flags {
 		flags = append(flags, f)
 	}
+	sort.Strings(flags)
 
 	ea.watcher.sendToChannel(WatchEvent{
 		ID:    aggregated.eventID,
@@ -169,6 +178,8 @@ func (ea *EventAggregator) flushPath(path string) {
 		Flags: flags,
 		Time:  aggregated.lastSeen,
 	})
+
+	ea.mu.Unlock()
 }
 
 // close stops the aggregator and flushes any remaining events
@@ -190,7 +201,7 @@ func (ea *EventAggregator) close() {
 
 	// Flush everything immediately
 	for _, path := range paths {
-		ea.flushPath(path)
+		ea.flushPath(path, true)
 	}
 }
 

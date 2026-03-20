@@ -214,6 +214,52 @@ func TestEventAggregator(t *testing.T) {
 		}
 	})
 
+	t.Run("DeterministicOrdering", func(t *testing.T) {
+		events := make(chan WatchEvent, 10)
+		w := &watcher{events: events}
+		cooldown := 50 * time.Millisecond
+		ea := newEventAggregator(w, cooldown)
+
+		path := "/test/file.txt"
+		ea.addEvent(WatchEvent{
+			Path:  path,
+			Types: []EventType{EventRename, EventCreate},
+			Flags: []string{"zeta", "alpha"},
+		})
+		ea.addEvent(WatchEvent{
+			Path:  path,
+			Types: []EventType{EventMod},
+			Flags: []string{"beta"},
+		})
+
+		time.Sleep(cooldown * 2)
+
+		select {
+		case ev := <-events:
+			if len(ev.Types) != 3 {
+				t.Fatalf("expected 3 types, got %d", len(ev.Types))
+			}
+			expectedTypes := []EventType{EventCreate, EventMod, EventRename}
+			for i := range expectedTypes {
+				if ev.Types[i] != expectedTypes[i] {
+					t.Fatalf("types not sorted deterministically: got %v want %v", ev.Types, expectedTypes)
+				}
+			}
+
+			expectedFlags := []string{"alpha", "beta", "zeta"}
+			if len(ev.Flags) != len(expectedFlags) {
+				t.Fatalf("expected %d flags, got %d", len(expectedFlags), len(ev.Flags))
+			}
+			for i := range expectedFlags {
+				if ev.Flags[i] != expectedFlags[i] {
+					t.Fatalf("flags not sorted deterministically: got %v want %v", ev.Flags, expectedFlags)
+				}
+			}
+		case <-time.After(100 * time.Millisecond):
+			t.Fatal("timeout waiting for aggregated event")
+		}
+	})
+
 	t.Run("ClosedGuard", func(t *testing.T) {
 		events := make(chan WatchEvent, 10)
 		w := &watcher{events: events}
