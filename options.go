@@ -27,7 +27,7 @@ func WithBufferSize(size int) WatcherOpt {
 }
 
 // WithIncRegex sets the regex patterns for paths to include
-// If no patterns are provided, all non-excluded paths are included.
+// If no patterns are provided, all non-excluded paths are included
 func WithIncRegex(patterns ...string) WatcherOpt {
 	return func(w *watcher) {
 		w.incRegexPatterns = patterns
@@ -47,6 +47,7 @@ func WithCustomChannels(events chan WatchEvent, dropped chan WatchEvent) Watcher
 		w.events = events
 		w.dropped = dropped
 		w.ownsEventsChannel = false
+		w.ownsDroppedChannel = false
 	}
 }
 
@@ -119,12 +120,12 @@ const (
 
 // WatchPath holds the configuration for a single watched path
 type WatchPath struct {
-	Path              string
-	Depth             WatchDepth
-	filter            PathFilter
-	eventMask         map[EventType]bool
-	incRegexPatterns  []string
-	excRegexPatterns  []string
+	Path             string
+	Depth            WatchDepth
+	filter           PathFilter
+	eventMask        map[EventType]bool
+	incRegexPatterns []string
+	excRegexPatterns []string
 }
 
 // PathOption is a function that configures a WatchPath
@@ -158,10 +159,10 @@ func WithPathExcRegex(patterns ...string) PathOption {
 	}
 }
 
-// WithEventMask restricts which event types are delivered for a specific watched path.
+// WithEventMask restricts which event types are delivered for a specific watched path
 // Only events whose type is in the mask will be forwarded to the Events() channel;
-// all other types are silently dropped for that path.
-// If no mask is set (the default), all event types are delivered.
+// all other types are silently dropped for that path
+// If no mask is set (the default), all event types are delivered
 //
 // Example: only receive create and delete events for a directory:
 //
