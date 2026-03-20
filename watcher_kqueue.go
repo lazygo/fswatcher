@@ -196,6 +196,18 @@ func (w *watcher) scanDirectoryLocked(k *kqueue, dirPath string) {
 	if len(newEntries) > 0 {
 		if err := k.batchAddWatchesLocked(newEntries); err == nil {
 			w.logInfo("Detected and added new entries", "count", len(newEntries), "dir", dirPath)
+			now := time.Now()
+			for _, entry := range newEntries {
+				// Emit create only for entries that were successfully registered
+				if _, exists := k.paths[entry.path]; !exists {
+					continue
+				}
+				w.handlePlatformEvent(WatchEvent{
+					Path:  entry.path,
+					Types: []EventType{EventCreate},
+					Time:  now,
+				})
+			}
 		} else {
 			w.logWarn("Failed to add watches for new entries", "error", err)
 		}
